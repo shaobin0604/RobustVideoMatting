@@ -1,4 +1,5 @@
 import av
+import cv2 as cv
 import os
 import pims
 import numpy as np
@@ -35,18 +36,23 @@ class VideoWriter:
         self.stream.pix_fmt = 'yuv420p'
         self.stream.bit_rate = bit_rate
     
-    def write(self, frames):
+    def dilate_image(self, src: cv.Mat, iterations: int = 1) -> cv.Mat:
+        kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (3, 3))
+        return cv.dilate(src=src, kernel=kernel, iterations=iterations)
+
+    def write(self, frames, dilate_iterations: int = 0):
         # frames: [T, C, H, W]
         self.stream.width = frames.size(3)
         self.stream.height = frames.size(2)
         if frames.size(1) == 1:
+            # 颜色通道数为 1
             frames = frames.repeat(1, 3, 1, 1) # convert grayscale to RGB
         frames = frames.mul(255).byte().cpu().permute(0, 2, 3, 1).numpy()
         for t in range(frames.shape[0]):
-            frame = frames[t]
+            frame = self.dilate_image(frames[t], dilate_iterations) if dilate_iterations > 0 else frames[t]
             frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
             self.container.mux(self.stream.encode(frame))
-                
+
     def close(self):
         self.container.mux(self.stream.encode())
         self.container.close()

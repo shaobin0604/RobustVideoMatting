@@ -14,6 +14,7 @@ python inference.py \
 
 import torch
 import os
+from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from typing import Optional, Tuple
@@ -21,7 +22,7 @@ from tqdm.auto import tqdm
 
 from inference_utils import VideoReader, VideoWriter, ImageSequenceReader, ImageSequenceWriter
 
-def convert_video(model,
+def convert_video(model: nn.Module,
                   input_source: str,
                   input_resize: Optional[Tuple[int, int]] = None,
                   downsample_ratio: Optional[float] = None,
@@ -32,6 +33,7 @@ def convert_video(model,
                   output_video_mbps: Optional[float] = None,
                   seq_chunk: int = 1,
                   num_workers: int = 0,
+                  dilate_iterations: int = 0,
                   progress: bool = True,
                   device: Optional[str] = None,
                   dtype: Optional[torch.dtype] = None):
@@ -91,6 +93,13 @@ def convert_video(model,
                 path=output_alpha,
                 frame_rate=frame_rate,
                 bit_rate=int(output_video_mbps * 1000000))
+            if dilate_iterations > 0:
+                # output dilated alpha
+                dirname, filename = os.path.split(output_alpha)
+                writer_pha_dilatation = VideoWriter(
+                    path=os.path.join(dirname, f"dilate-{dilate_iterations}-{filename}"),
+                    frame_rate=frame_rate,
+                    bit_rate=int(output_video_mbps * 1000000))
         if output_foreground is not None:
             writer_fgr = VideoWriter(
                 path=output_foreground,
@@ -101,6 +110,7 @@ def convert_video(model,
             writer_com = ImageSequenceWriter(output_composition, 'png')
         if output_alpha is not None:
             writer_pha = ImageSequenceWriter(output_alpha, 'png')
+            # TODO: writer_pha_dilatation
         if output_foreground is not None:
             writer_fgr = ImageSequenceWriter(output_foreground, 'png')
 
@@ -119,17 +129,17 @@ def convert_video(model,
             bar = tqdm(total=len(source), disable=not progress, dynamic_ncols=True)
             rec = [None] * 4
             for src in reader:
-
                 if downsample_ratio is None:
                     downsample_ratio = auto_downsample_ratio(*src.shape[2:])
 
                 src = src.to(device, dtype, non_blocking=True).unsqueeze(0) # [B, T, C, H, W]
                 fgr, pha, *rec = model(src, *rec, downsample_ratio)
-
                 if output_foreground is not None:
                     writer_fgr.write(fgr[0])
                 if output_alpha is not None:
                     writer_pha.write(pha[0])
+                if dilate_iterations > 0 and writer_pha_dilatation is not None:
+                    writer_pha_dilatation.write(pha[0], dilate_iterations=dilate_iterations)
                 if output_composition is not None:
                     if output_type == 'video':
                         com = fgr * pha + bgr * (1 - pha)
@@ -146,9 +156,10 @@ def convert_video(model,
             writer_com.close()
         if output_alpha is not None:
             writer_pha.close()
+            if writer_pha_dilatation is not None:
+                writer_pha_dilatation.close()
         if output_foreground is not None:
             writer_fgr.close()
-
 
 def auto_downsample_ratio(h, w):
     """
